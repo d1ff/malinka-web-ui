@@ -1,4 +1,4 @@
 malinka-web-ui
 ==============
 
-Django webapp for bot monitoring/handling
+Flask webapp for bot monitoring/handling

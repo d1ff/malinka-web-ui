@@ -69,7 +69,8 @@ class Robot(object):
         data = buf.split(',')
         try:
             self.duration, self.distance, self.angle = [int(x) for x in data]
-            logger.info('t=%s,d=%s,a=%s', self.duration, self.distance, self.angle)
+            self.notify_sensor_listeners()
+            logger.debug('t=%s,d=%s,a=%s', self.duration, self.distance, self.angle)
         except ValueError:
             pass
 
@@ -89,7 +90,6 @@ class Robot(object):
             if b == b'\n':
                 line = "".join([self.__byte_to_str(b) for b in buf])
                 self.__parse_line(line)
-                print(line.strip())
                 buf = []
 
     def scan(self):
@@ -108,17 +108,32 @@ class Robot(object):
         self.distance = None
         self.last_command = None
         self.x, self.y = 0, 0
+        self.sensor_listeners = set()
+        self.started = time.time()
+
+    def add_sensor_listener(self, fun):
+        self.sensor_listeners.add(fun)
+
+    def remove_sensor_listener(self, fun):
+        self.sensor_listeners.remove(fun)
+
+    def notify_sensor_listeners(self):
+        for listener in self.sensor_listeners:
+            listener(time.time() - self.started, self.duration, self.distance, self.angle)
 
     def __enter__(self):
         return self
 
     def __exit__(self, type, value, traceback):
+        self.close()
+
+    def close(self):
         self.running = False
         self.reader.join()
         self.serial.close()
 
 if __name__ == '__main__':
-    with Robot('/dev/tty.usbmodem411') as r:
+    with Robot('/dev/tty.usbmodem26421') as r:
         for i in range(5):
             r.scan()
             time.sleep(10)

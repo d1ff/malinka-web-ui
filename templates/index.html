@@ -1,0 +1,158 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Malinka Dashboard</title>
+    <link rel="stylesheet" href="//netdna.bootstrapcdn.com/bootstrap/3.1.1/css/bootstrap.min.css">
+    <link rel="stylesheet" href="//netdna.bootstrapcdn.com/bootstrap/3.1.1/css/bootstrap-theme.min.css">
+    <style>
+        body {
+            padding-top: 50px;
+        }
+
+        #logo {
+            padding-left: 60px;
+            background: url('static/logo-black-small.png') no-repeat scroll 0% 0%;
+        }
+
+        .navbar-inverse {
+            background: #000;
+        }
+    </style>
+    <script type="text/javascript" src="//code.jquery.com/jquery-1.4.2.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.1.1/js/bootstrap.min.js"></script>
+    <script type="text/javascript" src="//cdnjs.cloudflare.com/ajax/libs/socket.io/0.9.16/socket.io.min.js"></script>
+    <script type="text/javascript" src="//cdnjs.cloudflare.com/ajax/libs/knockout/3.1.0/knockout-min.js"></script>
+    <script type="text/javascript" src="http://cdnjs.cloudflare.com/ajax/libs/paper.js/0.9.18/paper-full.min.js"></script>
+    <script type="text/javascript" charset="utf-8">
+        var RobotViewModel = function() {
+            var self = this;
+            self.sensor_data = ko.observableArray([]);
+            self.connected = ko.observable(false);
+            self.not_connected = ko.computed(function()
+            { return !self.connected(); });
+            self.log_lines = ko.observableArray([]);
+            self.log = ko.computed(function() {
+                return self.log_lines().join('<br/>');
+            });
+
+            var canvas = document.getElementById('radar');
+            paper.setup(canvas);
+            self.path = new paper.Path();
+            self.path.strokeColor = 'black';
+
+            self.namespace = '/robot'; // change to an empty string to use the global namespace
+            // the socket.io documentation recommends sending an explicit package upon connection
+            // this is specially important when using the global namespace
+            self.socket = io.connect('http://' + document.domain + ':' + location.port + self.namespace);
+            self.socket.on('connect', function() {
+                self.connected(true);
+            });
+            self.socket.on('disconnect', function() {
+                self.connected(false);
+            });
+            // event handler for server sent data
+            // the data is displayed in the "Received" section of the page
+            self.socket.on('my response', function(msg) {
+                $('#log').append('<br>Received ' + msg.data);
+            });
+
+            self.socket.on('log', function (data) {
+                if (self.log_lines().length > 40)
+                    self.log_lines.pop();
+                self.log_lines.unshift(data.data);
+            });
+            self.draw_point = function (data) {
+                var x = 500 + data.distance * Math.cos(data.angle/180 * Math.PI);
+                var y = data.distance * Math.sin(data.angle/180 * Math.PI);
+                var point = new paper.Point(x, y);
+                self.path.add(point);
+                self.path.smooth();
+                paper.view.draw();
+            }
+
+            self.socket.on('sensor', function (data) {
+                self.draw_point(data.data);
+                if (self.sensor_data().length > 40) {
+                    self.sensor_data.pop();
+                    self.path.removeSegment(0);
+                }
+                self.sensor_data.unshift(data.data);
+            });
+
+            // handlers for the different forms in the page
+            // these send data to the server in a variety of ways
+            $('form#emit').submit(function(event) {
+                self.socket.emit('my event', {data: $('#emit_data').val()});
+                return false;
+            });
+        };
+        $(document).ready(function(){
+            ko.applyBindings(new RobotViewModel());
+        });
+    </script>
+</head>
+<body>
+    <nav class="navbar navbar-inverse navbar-fixed-top" role="navigation">
+        <div class="container">
+            <div id="logo" class="navbar-header">
+                <a class="navbar-brand" href="#">Malinka</a>
+            </div>
+            <p class="navbar-text navbar-right">
+                <!-- ko 'if': connected -->
+                <span class="glyphicon glyphicon-ok">&nbsp;</span> Connected
+                <!-- /ko -->
+                <!-- ko 'if': not_connected -->
+                <span class="glyphicon glyphicon-remove">&nbsp;</span> Not connected
+                <!-- /ko -->
+            </p>
+        </div>
+    </nav>
+
+    <div class="container" role="main">
+        <!--<div class="page-header">
+            <h1>Bootstrap starter template</h1>
+            <p class="lead">Use this document as a way to quickly start any new project.<br> All you get is this text and a mostly barebones HTML document.</p>
+        </div>-->
+        <div class="row">
+            <h3>Radar</h3>
+            <canvas id="radar" width="1000" height="200"></canvas>
+        </div>
+        <div class="row">
+            <div class="col-md-8">
+                <h3>Log</h3>
+                <pre data-bind="html: log"></pre>
+            </div>
+            <div class="col-md-4">
+                <h3>Sensor data</h3>
+                <table class="table table-condensed table-stripped">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Duration</th>
+                            <th>Distance</th>
+                            <th>Angle</th>
+                        </tr>
+                    </thead>
+                    <tbody data-bind="foreach: sensor_data">
+                        <tr>
+                            <td data-bind="text: time"></td>
+                            <td data-bind="text: duration"></td>
+                            <td data-bind="text: distance"></td>
+                            <td data-bind="text: angle"></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <h2>Send:</h2>
+            <form id="emit" method='POST' action='#'>
+            <input type="text" name="emit_data" id="emit_data" placeholder="Message">
+            <input type="submit" value="Echo">
+        </form>
+    </div>  
+</body>
+</html>

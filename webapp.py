@@ -25,7 +25,7 @@ logger.addHandler(ch)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
-app.config['ROBOT_PORT'] = sys.argv[0]
+app.config['ROBOT_PORT'] = sys.argv[1]
 socketio = SocketIO(app)
 robot = FlaskRobot(app)
 

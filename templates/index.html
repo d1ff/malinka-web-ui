@@ -43,7 +43,7 @@
                 return self.control_mode() == "manualMode";
             });
             
-            self.recording = ko.observable(true);
+            self.recording = ko.observable(false);
             self.program = [];
 
             self.record = function () {

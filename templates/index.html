@@ -20,28 +20,64 @@
         .navbar-inverse {
             background: #000;
         }
+
+        .radio .btn-group {
+            padding-top: 10px;
+        }
+
     </style>
+    <script type="text/javascript" src="http://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.6.0/underscore-min.js"></script>
     <script type="text/javascript" src="//code.jquery.com/jquery-1.4.2.min.js"></script>
     <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.1.1/js/bootstrap.min.js"></script>
     <script type="text/javascript" src="//cdnjs.cloudflare.com/ajax/libs/socket.io/0.9.16/socket.io.min.js"></script>
     <script type="text/javascript" src="//cdnjs.cloudflare.com/ajax/libs/knockout/3.1.0/knockout-min.js"></script>
-    <script type="text/javascript" src="http://cdnjs.cloudflare.com/ajax/libs/paper.js/0.9.18/paper-full.min.js"></script>
+    <script type="text/javascript" src="http://cdnjs.cloudflare.com/ajax/libs/fabric.js/1.4.0/fabric.min.js"></script>
     <script type="text/javascript" charset="utf-8">
         var RobotViewModel = function() {
             var self = this;
+            self.K = ko.observable(0.9); // kalman filter
+            self.power = ko.observable(255);
             self.sensor_data = ko.observableArray([]);
+            self.control_mode = ko.observable("manualMode");
+            self.manual_control_enabled = ko.computed(function() {
+                return self.control_mode() == "manualMode";
+            });
+            
+            self.recording = ko.observable(true);
+            self.program = [];
+
+            self.record = function () {
+                self.program = [];
+                self.recording(true);
+            }
+
+            self.stop_record = function () {
+                self.recording(false);
+                console.log(self.program);
+            }
+
+            self.play = function () {
+                if (self.recording())
+                    self.stop_record();
+                var started = self.program[0].time;
+                for (var i = 0, len = self.program.length; i < len; i++) {
+                    var cmd = self.program[i];
+                    setTimeout(cmd.exec, cmd.time - started);
+                }
+            }
+
             self.connected = ko.observable(false);
             self.not_connected = ko.computed(function()
             { return !self.connected(); });
+
             self.log_lines = ko.observableArray([]);
             self.log = ko.computed(function() {
                 return self.log_lines().join('<br/>');
             });
 
-            var canvas = document.getElementById('radar');
-            paper.setup(canvas);
-            self.path = new paper.Path();
-            self.path.strokeColor = 'black';
+            self.radar = new fabric.StaticCanvas('radar_canvas', {
+                backgroundColor: 'rgb(0,0,0,255)'
+            });
 
             self.namespace = '/robot'; // change to an empty string to use the global namespace
             // the socket.io documentation recommends sending an explicit package upon connection
@@ -58,27 +94,55 @@
             self.socket.on('my response', function(msg) {
                 $('#log').append('<br>Received ' + msg.data);
             });
+            self.socket.on('changed k', function(msg) {
+                self.K(msg.data);
+            });
+            self.change_K = function() {
+                self.socket.emit('change k', {data: self.K()});
+            };
+            self.socket.on('changed power', function(msg) {
+                self.power(msg.data);
+            });
+            self.change_power = function() {
+                self.socket.emit('change power', {data: self.power()});
+            };
 
             self.socket.on('log', function (data) {
                 if (self.log_lines().length > 40)
                     self.log_lines.pop();
                 self.log_lines.unshift(data.data);
             });
+
+            self.to_point = function (distance, angle) {
+                var x = 150 - distance * Math.cos(angle/180 * Math.PI);
+                var y = 300 - distance * Math.sin(angle/180 * Math.PI);
+                return {left: x, top: y};
+            }
+
+            self.radar_line = false;
+
+            self.points = [];
+
             self.draw_point = function (data) {
-                var x = 500 + data.distance * Math.cos(data.angle/180 * Math.PI);
-                var y = data.distance * Math.sin(data.angle/180 * Math.PI);
-                var point = new paper.Point(x, y);
-                self.path.add(point);
-                self.path.smooth();
-                paper.view.draw();
+                var options = _.extend(self.to_point(data.distance, data.angle), {
+                        radius: data.distance * 2.5 * Math.PI / 180,
+                        fill: 'yellow',
+                        originX: 'center',
+                        originY: 'center'
+                    });
+                var p = new fabric.Circle(options);
+                self.radar.add(p);
+                self.points.push(p);
+                self.radar.renderAll();
             }
 
             self.socket.on('sensor', function (data) {
-                self.draw_point(data.data);
                 if (self.sensor_data().length > 40) {
                     self.sensor_data.pop();
-                    self.path.removeSegment(0);
+                    self.radar.remove(self.points.shift());
+                    //self.path.removeSegment(0);
                 }
+                self.draw_point(data.data);
                 self.sensor_data.unshift(data.data);
             });
 
@@ -88,6 +152,67 @@
                 self.socket.emit('my event', {data: $('#emit_data').val()});
                 return false;
             });
+
+            self.old_points = false;
+            self.draw_radar = function() {
+                self.line_angle = -90;
+                self.line = new fabric.Line({
+                    x1: 150, y1: 300,
+                    x2: 150, y2: 0,
+                    stroke: 'red',
+                    strokeWidth: 2,
+                });
+                self.radar.add(self.line);
+                var circles = _.range(50, 350, 50).map(function (radius) {
+                    var options = _.extend(self.to_point(0, 0), {
+                        radius: radius,
+                        stroke: 'green',
+                        fill: 'transparent',
+                        originX: 'center',
+                        originY: 'center'
+                    });
+                    var c = new fabric.Circle(options);
+                    return c;
+                });
+                _.each(circles, function(i) { self.radar.add(i); });;
+            };
+            self.send_command = function (command) {
+                var enabled = self.manual_control_enabled();
+                console.log(enabled, command);
+                if (enabled) {
+                    if (self.recording()) {
+                        var cmd = {time: Date.now(), command: command};
+                        cmd.exec = _.bind(function() {
+                            self.send_command(this.command);
+                        }, cmd);
+                        self.program.push(cmd);
+                    }
+                    self.socket.emit('command', {data: command});
+                }
+            };
+            self.forward =  _.bind(self.send_command, self, "forward");
+            self.backward =  _.bind(self.send_command, self, "backward");
+            self.turn_left =  _.bind(self.send_command, self, "turn_left");
+            self.turn_right =  _.bind(self.send_command, self, "turn_right");
+            self.straight =  _.bind(self.send_command, self, "straight");
+            self.stop =  _.bind(self.send_command, self, "stop");
+            self.scan =  _.bind(self.send_command, self, "scan");
+            self.keyHandlers = {
+                87: self.forward,
+                83: self.backward,
+                65: self.turn_left,
+                68: self.turn_right,
+                84: self.straight, // T
+                82: self.scan,
+                32: self.stop, // space
+            };
+            $(document).keydown(function(event) {
+                if (event.which in self.keyHandlers)
+                    self.keyHandlers[event.which]();
+                return true;
+            });
+            self.draw_radar = _.throttle(self.draw_radar, 100);
+            self.draw_radar();
         };
         $(document).ready(function(){
             ko.applyBindings(new RobotViewModel());
@@ -117,8 +242,115 @@
             <p class="lead">Use this document as a way to quickly start any new project.<br> All you get is this text and a mostly barebones HTML document.</p>
         </div>-->
         <div class="row">
-            <h3>Radar</h3>
-            <canvas id="radar" width="1000" height="200"></canvas>
+            <div class="col-md-3">
+                <h3>Settings</h3>
+                <div class="form-horizontal">
+                    <div class="form-group">
+                        <label class="control-label col-sm-2" for="k-input">K</label>
+                        <div class="col-sm-10">
+                            <input class="form-control" id="k-input" data-bind="value: K">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label col-sm-2" for="power-input">Power</label>
+                        <div class="col-sm-10">
+                            <input class="form-control" id="power-input" data-bind="value: power">
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-default" data-bind="click: change_K">Save K</button>
+                        <button class="btn btn-default" data-bind="click: change_power">Save Power</button>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-5">
+                <h3>Controls</h3>
+                <div class="radio">
+                    <label>
+                        <input type="radio" name="controlModeRadios" id="autoMode" value="autoMode" data-bind="checked: control_mode">
+                        Auto
+                    </label>
+                </div>
+                <div class="radio">
+                    <label>
+                        <input type="radio" name="controlModeRadios" id="manualMode" value="manualMode" data-bind="checked: control_mode">
+                        Manual
+                    </label>
+                    </br>
+                    <div class="btn-group">
+                        <button type="button"
+                            class="btn btn-default"
+                            data-bind="enable: manual_control_enabled,
+                            click: turn_left">Left</button>
+                        <button type="button"
+                            class="btn btn-default"
+                            data-bind="enable: manual_control_enabled,
+                            click: straight">Straight</button>
+                        <button type="button"
+                            class="btn btn-default"
+                            data-bind="enable: manual_control_enabled,
+                            click: turn_right">Right</button>
+                    </div>
+                    <div class="btn-group">
+                            <button type="button"
+                            class="btn btn-default"
+                            data-bind="enable: manual_control_enabled,
+                            click: forward">Forward</button>
+                        <button type="button"
+                            class="btn btn-default"
+                            data-bind="enable: manual_control_enabled,
+                            click: stop">Stop</button>
+                        <button type="button"
+                            class="btn btn-default"
+                            data-bind="enable: manual_control_enabled,
+                            click: backward">Backward</button>
+                    </div>
+                    <div class="btn-group">
+                        <button type="button"
+                            class="btn btn-default"
+                            data-bind="enable: manual_control_enabled,
+                            click: scan">Scan</button>
+                    </div>
+                    <div class="btn-group">
+                        <button type="button"
+                            class="btn btn-default"
+                            data-bind="enable: manual_control_enabled,
+                            click: record">
+                                <span class="glyphicon glyphicon-record">&nbsp;</span>
+                                Record</button>
+                        <button type="button"
+                            class="btn btn-default"
+                            data-bind="enable: manual_control_enabled,
+                            click: stop_record">
+                                <span class="glyphicon glyphicon-stop">&nbsp;</span>
+                                Stop</button>
+                        <button type="button"
+                            class="btn btn-default"
+                            data-bind="enable: manual_control_enabled,
+                            click: play">
+                                <span class="glyphicon glyphicon-play">&nbsp;</span>
+                                Play</button>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <h3>Shortcuts</h3>
+                <ul>
+                    <li>W/A/S/D &mdash; Forward/Left/Right/Backward</li>
+                    <li>Space &mdash; stop</li>
+                    <li>T &mdash; straight</li>
+                    <li>R &mdash; scan</li>
+                </ul>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-md-6" id="canvas-holder">
+                <h3>Radar</h3>
+                <canvas id="radar_canvas" height="300" width="300" ></canvas>
+            </div>
+            <div class="col-md-6">
+                <h3>Map</h3>
+            </div>
         </div>
         <div class="row">
             <div class="col-md-8">
@@ -147,12 +379,6 @@
                 </table>
             </div>
         </div>
-
-        <h2>Send:</h2>
-            <form id="emit" method='POST' action='#'>
-            <input type="text" name="emit_data" id="emit_data" placeholder="Message">
-            <input type="submit" value="Echo">
-        </form>
     </div>  
 </body>
 </html>

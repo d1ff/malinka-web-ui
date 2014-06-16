@@ -1,7 +1,9 @@
 from flask import Flask, render_template
 from flask.ext.socketio import SocketIO, emit
 from flask_robot import FlaskRobot
+from time import sleep
 import logging
+import random
 
 # create logger
 logger = logging.getLogger()
@@ -22,7 +24,7 @@ logger.addHandler(ch)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
-app.config['ROBOT_PORT'] = '/dev/tty.usbmodem26421'
+app.config['ROBOT_PORT'] = '/dev/tty.usbmodem24121'
 socketio = SocketIO(app)
 robot = FlaskRobot(app)
 
@@ -54,10 +56,36 @@ def send_foo(filename):
 def test_message(message):
     emit('my response', {'data': message['data']}, namespace='/robot')
 
+xk = 0
+K = 0.9
+power = 255
+
+@socketio.on('change k', namespace='/robot')
+def change_k(message):
+    global K
+    K = float(message['data'])
+    logger.info('Recieved new K = %s', K)
+    emit('changed k', {'data': K}, namespace='/robot')
+
+@socketio.on('command', namespace='/robot')
+def process_command(message):
+    command = message['data']
+    logger.info('Recieved command %s', command)
+    robot.instance.execute(command)
+
+@socketio.on('change power', namespace='/robot')
+def change_power(message):
+    global power
+    power = max(min(int(message['data']), 255), 0)
+    logger.info('Recieved new power = %s', power)
+    emit('changed power', {'data': power}, namespace='/robot')
+
 def broadcast_sensor_data(time, duration, distance, angle):
+    global xk, K
+    xk = K * distance + (1 - K) * xk
     data = {
         'time': time,
-        'distance': distance,
+        'distance': xk,
         'duration': duration,
         'angle': angle
     }
@@ -67,6 +95,16 @@ def broadcast_sensor_data(time, duration, distance, angle):
 def test_connect():
     logger.info('Client connected')
     robot.instance.add_sensor_listener(broadcast_sensor_data)
+    #r = lambda : random.randint(0, 5) - 5
+    #for i in xrange(150, 300, 20):
+        #if i % 2 == 0:
+            #start, stop, step = 45, 135, 5
+        #else:
+            #start, stop, step = 135, 45, -5
+        #for j in xrange(start, stop, step):
+            #broadcast_sensor_data(1, 1, i + r(), j)
+            #broadcast_sensor_data(1, 1, i + r(), j)
+            #broadcast_sensor_data(1, 1, i + r(), j)
 
 @socketio.on('disconnect')
 def test_disconnect():

@@ -4,6 +4,7 @@ from flask_robot import FlaskRobot
 from time import sleep
 import logging
 import random
+import sys
 
 # create logger
 logger = logging.getLogger()
@@ -24,7 +25,7 @@ logger.addHandler(ch)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
-app.config['ROBOT_PORT'] = '/dev/tty.usbmodem24121'
+app.config['ROBOT_PORT'] = sys.argv[0]
 socketio = SocketIO(app)
 robot = FlaskRobot(app)
 
@@ -112,4 +113,4 @@ def test_disconnect():
     robot.instance.remove_sensor_listener(broadcast_sensor_data)
 
 if __name__ == '__main__':
-    socketio.run(app)
+    socketio.run(app, host='0.0.0.0')
